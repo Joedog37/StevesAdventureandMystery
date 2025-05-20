@@ -1,4 +1,4 @@
-package com.example.stevesadeventureandmystery
+package com.example.stevesadventureandmystery
 
 import org.junit.Test
 

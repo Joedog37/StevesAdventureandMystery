@@ -1,14 +1,15 @@
-package com.example.stevesadeventureandmystery.game.core // Adjust if your package is different
+package com.example.stevesadventureandmystery.game.core
 
 enum class BootStage {
+    IDLE,
+    LOADING_ASSETS,
     SHOWING_WARNING,
     SHOWING_LOGO,
     FADING_IN_BACKGROUND,
-    SHOWING_TITLE,
-    AWAITING_AUDIO_PROMPT,
+    SHOWING_TITLE, // Title and audio now happen under this logical stage or just before continue
+    // AWAITING_AUDIO_PROMPT, // Kept commented as per your version
     SHOWING_CONTINUE_BUTTON,
-    IDLE,
-    LOADING_ASSETS,
     AWAITING_CONTINUE_INPUT,
-    COMPLETED
+    COMPLETED,
+    ERROR // Recommended for handling issues
 }

@@ -1,4 +1,4 @@
-package com.example.stevesadeventureandmystery.ui.theme
+package com.example.stevesadventureandmystery.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

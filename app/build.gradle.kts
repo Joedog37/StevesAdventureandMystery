@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.stevesadeventureandmystery"
+    namespace = "com.example.stevesadventureandmystery"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.stevesadeventureandmystery"
+        applicationId = "com.example.stevesadventureandmystery"
         minSdk = 34
         targetSdk = 35
         versionCode = 1
