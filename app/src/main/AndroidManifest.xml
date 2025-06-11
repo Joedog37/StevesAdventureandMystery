@@ -19,7 +19,7 @@
             android:screenOrientation="landscape"
             android:excludeFromRecents="true"
             tools:ignore="DiscouragedApi">  <!-- tools:ignore is now an attribute of activity -->
-            <!-- The comment "<!- Add this line -->" can be placed here or on its own line if needed, but not interrupting the tag itself -->
+            <!-- Regarding a previous instruction like "Add this line": it can be placed here or on its own line if needed, but not interrupting the tag itself -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
