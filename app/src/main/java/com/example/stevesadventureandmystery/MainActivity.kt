@@ -1,5 +1,8 @@
 package com.example.stevesadventureandmystery
 
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.SharedPreferences
 import android.content.res.AssetFileDescriptor
 import android.media.MediaPlayer
 import android.os.Bundle
@@ -28,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -42,32 +46,41 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.edit
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.stevesadventureandmystery.game.core.BootStage
-import com.example.stevesadventureandmystery.game.core.SaveLoadManager // Added for SaveLoadManager
-import com.example.stevesadventureandmystery.game.data.SaveSlotInfo // Added for SaveSlotInfo
+import com.example.stevesadventureandmystery.game.core.SaveLoadManager
+import com.example.stevesadventureandmystery.game.data.SaveSlotInfo
 import com.example.stevesadventureandmystery.game.scenes.BootScene
 import com.example.stevesadventureandmystery.game.scenes.CreditsScreen
-import com.example.stevesadventureandmystery.game.scenes.GameSlotsScreen // Added for GameSlotsScreen Composable
+import com.example.stevesadventureandmystery.game.scenes.GameSlotsScreen
+import com.example.stevesadventureandmystery.game.scenes.SettingsScreen
 import com.example.stevesadventureandmystery.ui.theme.StevesAdventureAndMysteryTheme
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch // Added for launching coroutines
+import kotlinx.coroutines.launch
 import java.io.IOException
+import kotlinx.coroutines.Dispatchers
 
 const val TAG = "MainActivity"
 val PREVIEW_PLACEHOLDER_BACKGROUND = R.drawable.pexels_krisof_1252890
+private const val PREFS_NAME = "GameSettingsPrefs"
+private const val KEY_MUSIC_VOLUME = "musicVolume"
+private const val KEY_SFX_VOLUME = "sfxVolume"
+private const val KEY_VOICE_VOLUME = "voiceVolume"
+
 
 enum class Screen {
     BOOT,
     MAIN_MENU,
     GAME_SLOTS,
     CREDITS,
+    SETTINGS
 }
 
+@SuppressLint("AutoboxingStateCreation")
 open class MainActivity : ComponentActivity() {
     lateinit var bootScene: BootScene
     var currentScreen by mutableStateOf(Screen.BOOT)
@@ -78,22 +91,28 @@ open class MainActivity : ComponentActivity() {
 
     private var creditsMediaPlayer: MediaPlayer? = null
     private var creditsMusicShouldBePlaying by mutableStateOf(false)
-    private val creditsMusicAssetPath = "audio/music/journeys_end.mp3" // <<< UPDATE THIS PATH IF NEEDED
+    private val creditsMusicAssetPath = "audio/music/journeys_end.mp3"
 
-    // ++ New for Save/Load ++
     private lateinit var saveLoadManager: SaveLoadManager
     var saveSlotsState by mutableStateOf<List<SaveSlotInfo>>(emptyList())
-    // ++ End New for Save/Load ++
+
+    var musicVolumeState by mutableFloatStateOf(1.0f)
+    var sfxVolumeState by mutableFloatStateOf(1.0f)
+    var voiceVolumeState by mutableStateOf(1.0f)
+    lateinit var sharedPreferences: SharedPreferences
+
+    var showClearDataConfirmationDialog by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.d(TAG, "onCreate called. isRecreating: ${savedInstanceState != null}, initialScreen: $currentScreen")
         hideSystemUI()
 
-        // ++ Initialize SaveLoadManager ++
+        sharedPreferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        loadGameSettings()
+
         saveLoadManager = SaveLoadManager(applicationContext)
-        loadSaveSlots() // Load initial save slots
-        // ++ End Initialize SaveLoadManager ++
+        loadSaveSlots()
 
         bootScene = BootScene(
             context = applicationContext,
@@ -103,10 +122,12 @@ open class MainActivity : ComponentActivity() {
                     if (wantsToTransitionToMainMenu && bootScene.currentStage == BootStage.COMPLETED) {
                         currentScreen = Screen.MAIN_MENU
                         mainMenuMusicShouldBePlaying = true
+                        applyMusicVolumeToPlayer(mainMenuMediaPlayer)
                         val handedOverPlayer = bootScene.getMediaPlayerInstance()
                         if (handedOverPlayer != null) {
                             bootScene.relinquishMediaPlayerControl()
                             mainMenuMediaPlayer = handedOverPlayer
+                            applyMusicVolumeToPlayer(mainMenuMediaPlayer)
                             isMusicHandedOverToMainMenu = true
                             if (!handedOverPlayer.isPlaying) {
                                 try {
@@ -149,6 +170,7 @@ open class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     GameScreen(bootScene = bootScene, mainActivity = this)
+                    ClearDataConfirmationDialog()
                 }
             }
         }
@@ -179,24 +201,23 @@ open class MainActivity : ComponentActivity() {
 
     open fun navigateToMainMenu() {
         Log.d(TAG, "navigateToMainMenu called. Current screen: $currentScreen")
-        if (currentScreen == Screen.CREDITS || currentScreen == Screen.GAME_SLOTS) { // Modified condition
+        if (currentScreen == Screen.CREDITS || currentScreen == Screen.GAME_SLOTS || currentScreen == Screen.SETTINGS) {
             if (currentScreen == Screen.CREDITS) {
                 creditsMusicShouldBePlaying = false
                 releaseCreditsMusic()
                 Log.d(TAG, "Credits music released for main menu transition.")
             }
-            // If coming from GameSlots, main menu music might have been paused.
 
             currentScreen = Screen.MAIN_MENU
-            mainMenuMusicShouldBePlaying = true // Set this before attempting to play
+            mainMenuMusicShouldBePlaying = true
 
-            // Existing logic for main menu music...
             if (mainMenuMediaPlayer == null && bootScene.backgroundMusicAssetPath != null) {
                 Log.d(TAG, "navigateToMainMenu: Main menu player null, re-initializing.")
                 initializeAndPlayMainMenuMusic(bootScene.backgroundMusicAssetPath!!)
             } else if (mainMenuMediaPlayer != null && !mainMenuMediaPlayer!!.isPlaying) {
                 Log.d(TAG, "navigateToMainMenu: Main menu player not playing, attempting to start.")
                 try {
+                    applyMusicVolumeToPlayer(mainMenuMediaPlayer)
                     mainMenuMediaPlayer?.start()
                     Log.d(TAG, "Restarted MainMenu music on returning to Main Menu.")
                 } catch (e: IllegalStateException) {
@@ -212,41 +233,39 @@ open class MainActivity : ComponentActivity() {
         }
     }
 
-    // ++ New Navigation Function for Game Slots ++
     open fun navigateToGameSlots() {
         Log.d(TAG, "navigateToGameSlots called. Current screen: $currentScreen")
         if (currentScreen == Screen.MAIN_MENU) {
-            // Optionally pause main menu music if it's playing
             if (mainMenuMusicShouldBePlaying && mainMenuMediaPlayer?.isPlaying == true) {
                 mainMenuMediaPlayer?.pause()
                 Log.d(TAG, "Main menu music PAUSED for game slots transition.")
             }
             currentScreen = Screen.GAME_SLOTS
-            loadSaveSlots() // Ensure slots are fresh when navigating to the screen
+            loadSaveSlots()
         }
     }
-    // ++ End New Navigation Function for Game Slots ++
 
-    // ++ New function to load/refresh save slots ++
+    open fun navigateToSettings() {
+        Log.d(TAG, "navigateToSettings called. Current screen: $currentScreen")
+        if (currentScreen == Screen.MAIN_MENU) {
+            currentScreen = Screen.SETTINGS
+        }
+    }
+
     private fun loadSaveSlots() {
-        // Since getAllSaveSlotInfo is not suspend, we can call it directly.
-        // If it were suspend, you'd launch a coroutine.
         saveSlotsState = saveLoadManager.getAllSaveSlotInfo()
         Log.d(TAG, "Save slots loaded/refreshed: ${saveSlotsState.size} slots.")
     }
-    // ++ End new function ++
 
-    // ++ New Functions for Game Slot Actions ++
     open fun onGameSlotSelected(slotInfo: SaveSlotInfo, isNewGame: Boolean) {
-        lifecycleScope.launch { // Use lifecycleScope for coroutines
+        lifecycleScope.launch {
             if (isNewGame) {
                 Log.d(TAG, "Starting new game in slot: ${slotInfo.slotId}")
                 val success = saveLoadManager.startNewGameInSlot(slotInfo.slotId)
                 if (success) {
-                    loadSaveSlots() // Refresh the slots view
+                    loadSaveSlots()
                     Log.i(TAG, "New game started. Slot ${slotInfo.slotId} is now active. Transition to game...")
-                    // For now, let's just go back to Main Menu as a placeholder
-                    navigateToMainMenu() // Or directly set currentScreen = Screen.MAIN_MENU and handle music
+                    navigateToMainMenu()
                 } else {
                     Log.e(TAG, "Failed to start new game in slot ${slotInfo.slotId}")
                 }
@@ -255,8 +274,7 @@ open class MainActivity : ComponentActivity() {
                 val loadedData = saveLoadManager.loadGameFromSlot(slotInfo.slotId)
                 if (loadedData != null) {
                     Log.i(TAG, "Game loaded from slot ${slotInfo.slotId}: ${loadedData.chapterName}. Transition to game...")
-                    // For now, let's just go back to Main Menu as a placeholder
-                    navigateToMainMenu() // Or directly set currentScreen = Screen.MAIN_MENU and handle music
+                    navigateToMainMenu()
                 } else {
                     Log.e(TAG, "Failed to load game from slot ${slotInfo.slotId}")
                 }
@@ -269,14 +287,59 @@ open class MainActivity : ComponentActivity() {
             Log.d(TAG, "Deleting game slot: $slotId")
             val success = saveLoadManager.deleteSaveSlot(slotId)
             if (success) {
-                loadSaveSlots() // Refresh the UI
+                loadSaveSlots()
                 Log.i(TAG, "Slot $slotId deleted.")
             } else {
                 Log.e(TAG, "Failed to delete slot $slotId")
             }
         }
     }
-    // ++ End New Functions for Game Slot Actions ++
+
+    open fun requestClearAllSaveData() {
+        Log.d(TAG, "Request to clear all save data received.")
+        showClearDataConfirmationDialog = true
+    }
+
+    private fun executeClearAllSaveData() {
+        Log.i(TAG, "Executing clear all save data.")
+        lifecycleScope.launch(Dispatchers.IO) {
+            val success = saveLoadManager.clearAllSaveData()
+            runOnUiThread {
+                if (success) {
+                    loadSaveSlots()
+                    Log.i(TAG, "All save data cleared successfully.")
+
+                } else {
+                    Log.e(TAG, "Failed to clear all save data.")
+
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun ClearDataConfirmationDialog() {
+        if (showClearDataConfirmationDialog) {
+            AlertDialog(
+                onDismissRequest = { showClearDataConfirmationDialog = false },
+                title = { Text("Confirm Clear Data") },
+                text = { Text("Are you sure you want to delete all save game data? This action cannot be undone.") },
+                confirmButton = {
+                    Button(onClick = {
+                        showClearDataConfirmationDialog = false
+                        executeClearAllSaveData()
+                    }) {
+                        Text("Clear Data")
+                    }
+                },
+                dismissButton = {
+                    Button(onClick = { showClearDataConfirmationDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+    }
 
     private fun handleActivityLifecycle(savedInstanceState: Bundle?) {
         val isRecreating = savedInstanceState != null
@@ -295,20 +358,20 @@ open class MainActivity : ComponentActivity() {
                     initializeAndPlayCreditsMusic()
                 } else if (!creditsMediaPlayer!!.isPlaying) {
                     try {
+                        applyMusicVolumeToPlayer(creditsMediaPlayer)
                         creditsMediaPlayer?.start()
                         Log.d(TAG, "Credits music started on recreate.")
                     } catch (e: Exception) {
                         Log.e(TAG, "Error starting music for credits on recreate: ${e.message}", e)
                         releaseCreditsMusic()
-                        initializeAndPlayCreditsMusic() // attempt reinit
+                        initializeAndPlayCreditsMusic()
                     }
                 }
             }
-            // Add handling for GameSlotsScreen if needed, e.g., refreshing slot data
             if (currentScreen == Screen.GAME_SLOTS) {
                 loadSaveSlots()
             }
-        } else { // Fresh start
+        } else {
             if (currentScreen == Screen.BOOT && bootScene.currentStage != BootStage.COMPLETED && bootScene.currentStage != BootStage.ERROR) {
                 if (::bootScene.isInitialized) bootScene.start() else Log.e(TAG, "BootScene not init in handleActivityLifecycle for fresh start")
             } else if (currentScreen == Screen.MAIN_MENU && mainMenuMusicShouldBePlaying && mainMenuMediaPlayer == null && bootScene.backgroundMusicAssetPath != null) {
@@ -337,6 +400,7 @@ open class MainActivity : ComponentActivity() {
                 isLooping = true
                 setOnPreparedListener { mp ->
                     Log.d(TAG, "MainMenu music (MainActivity) prepared.")
+                    applyMusicVolumeToPlayer(mp)
                     if (mainMenuMusicShouldBePlaying && currentScreen == Screen.MAIN_MENU) {
                         try {
                             mp.start()
@@ -401,6 +465,7 @@ open class MainActivity : ComponentActivity() {
                 isLooping = true
                 setOnPreparedListener { mp ->
                     Log.d(TAG, "Credits MediaPlayer prepared.")
+                    applyMusicVolumeToPlayer(mp)
                     if (creditsMusicShouldBePlaying && currentScreen == Screen.CREDITS) {
                         try {
                             mp.start()
@@ -493,6 +558,7 @@ open class MainActivity : ComponentActivity() {
             if (mainMenuMediaPlayer != null) {
                 if (!mainMenuMediaPlayer!!.isPlaying) {
                     try {
+                        applyMusicVolumeToPlayer(mainMenuMediaPlayer)
                         mainMenuMediaPlayer?.start()
                         Log.d(TAG, "MainMenu music resumed by MainActivity.")
                     } catch (e: IllegalStateException) {
@@ -513,6 +579,7 @@ open class MainActivity : ComponentActivity() {
             if (creditsMediaPlayer != null) {
                 if (!creditsMediaPlayer!!.isPlaying) {
                     try {
+                        applyMusicVolumeToPlayer(creditsMediaPlayer)
                         creditsMediaPlayer?.start()
                         Log.d(TAG, "Credits music resumed.")
                     } catch (e: IllegalStateException) {
@@ -552,7 +619,61 @@ open class MainActivity : ComponentActivity() {
             bootScene.cleanup()
         }
     }
-} // End of MainActivity Class
+
+    open fun onMusicVolumeChange(newVolume: Float) {
+        musicVolumeState = newVolume.coerceIn(0f, 1f)
+        applyMusicVolumeToPlayer(mainMenuMediaPlayer)
+        applyMusicVolumeToPlayer(creditsMediaPlayer)
+        // Potentially apply to bootScene's player if it's active and separate
+        if (::bootScene.isInitialized && bootScene.getMediaPlayerInstance() != null &&
+            bootScene.getMediaPlayerInstance() != mainMenuMediaPlayer && // Avoid double-applying if handed over
+            bootScene.getMediaPlayerInstance() != creditsMediaPlayer) { // Should not happen but good check
+            bootScene.setVolume(musicVolumeState)
+        }
+        saveGameSettings()
+        Log.d(TAG, "Music volume changed to: $musicVolumeState")
+    }
+
+    open fun onSfxVolumeChange(newVolume: Float) {
+        sfxVolumeState = newVolume.coerceIn(0f, 1f)
+        saveGameSettings()
+        Log.d(TAG, "SFX volume changed to: $sfxVolumeState")
+    }
+
+    open fun onVoiceVolumeChange(newVolume: Float) {
+        if (newVolume in 0f..1f) {
+            voiceVolumeState = newVolume
+            // Later, when you have voice MediaPlayer instances, apply volume here:
+            // applyVolumeToVoicePlayers(newVolume)
+            saveGameSettings()
+            Log.d(TAG, "Voice volume changed to: $newVolume")
+        } else {
+            Log.w(TAG, "Attempted to set invalid voice volume: $newVolume")
+        }
+    }
+
+    private fun applyMusicVolumeToPlayer(mediaPlayer: MediaPlayer?) {
+        mediaPlayer?.setVolume(musicVolumeState, musicVolumeState)
+    }
+
+    private fun saveGameSettings() {
+        sharedPreferences.edit {
+            putFloat(KEY_MUSIC_VOLUME, musicVolumeState)
+            putFloat(KEY_SFX_VOLUME, sfxVolumeState)
+            putFloat(KEY_VOICE_VOLUME, voiceVolumeState)
+        }
+        Log.d(TAG, "Game settings saved.")
+    }
+
+    fun loadGameSettings() {
+        musicVolumeState = sharedPreferences.getFloat(KEY_MUSIC_VOLUME, 1.0f)
+        sfxVolumeState = sharedPreferences.getFloat(KEY_SFX_VOLUME, 1.0f)
+        voiceVolumeState = sharedPreferences.getFloat(KEY_VOICE_VOLUME, 1.0f)
+        Log.d(TAG, "Game settings loaded: Music Vol=$musicVolumeState, SFX Vol=$sfxVolumeState")
+    }
+
+}
+
 
 @Composable
 fun GameScreen(bootScene: BootScene, mainActivity: MainActivity) {
@@ -562,7 +683,7 @@ fun GameScreen(bootScene: BootScene, mainActivity: MainActivity) {
             .background(Color.Black)
     ) {
         val currentEffectiveStage = bootScene.currentStage
-        val currentScreen = mainActivity.currentScreen // Make sure to use the activity's currentScreen
+        val currentScreen = mainActivity.currentScreen
 
         val isBooting = currentScreen == Screen.BOOT &&
                 currentEffectiveStage != BootStage.ERROR &&
@@ -571,22 +692,27 @@ fun GameScreen(bootScene: BootScene, mainActivity: MainActivity) {
         val displayError = currentScreen == Screen.BOOT && currentEffectiveStage == BootStage.ERROR
 
         val showBootSceneBackground = bootScene.backgroundDrawableRes != 0 &&
-                ( (isBooting && currentEffectiveStage >= BootStage.FADING_IN_BACKGROUND) ||
-                        ( (currentScreen == Screen.MAIN_MENU || currentScreen == Screen.GAME_SLOTS) && // Show background for GameSlots too
-                                bootScene.isBootSequenceCompletedAndBackgroundAvailable() )
-                        )
+                ((isBooting && currentEffectiveStage >= BootStage.FADING_IN_BACKGROUND) ||
+                        ((currentScreen == Screen.MAIN_MENU || currentScreen == Screen.GAME_SLOTS || currentScreen == Screen.SETTINGS) &&
+                                bootScene.isBootSequenceCompletedAndBackgroundAvailable()))
 
 
         if (showBootSceneBackground) {
             val imageAlpha by animateFloatAsState(
-                targetValue = if (currentScreen == Screen.MAIN_MENU || currentScreen == Screen.GAME_SLOTS || (isBooting && currentEffectiveStage >= BootStage.SHOWING_TITLE)) bootScene.backgroundAlpha else 0f,
+                targetValue = if (currentScreen == Screen.MAIN_MENU ||
+                    currentScreen == Screen.GAME_SLOTS ||
+                    currentScreen == Screen.SETTINGS ||
+                    (isBooting && currentEffectiveStage >= BootStage.SHOWING_TITLE)
+                ) bootScene.backgroundAlpha else 0f,
                 animationSpec = tween(durationMillis = bootScene.defaultFadeDurationMillis.toInt()),
                 label = "BackgroundImageAlpha"
             )
             Image(
                 painter = painterResource(id = bootScene.backgroundDrawableRes),
                 contentDescription = "Main Background",
-                modifier = Modifier.fillMaxSize().alpha(imageAlpha),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(imageAlpha),
                 contentScale = ContentScale.Crop
             )
         }
@@ -597,8 +723,9 @@ fun GameScreen(bootScene: BootScene, mainActivity: MainActivity) {
                 .background(
                     color = when {
                         displayError -> Color.Black
-                        currentScreen == Screen.CREDITS -> Color.Transparent // Or a specific credits background
-                        currentScreen == Screen.GAME_SLOTS -> Color.Black.copy(alpha = 0.3f) // Dimmed background for slots screen
+                        currentScreen == Screen.CREDITS -> Color.Transparent
+                        currentScreen == Screen.GAME_SLOTS -> Color.Black.copy(alpha = 0.3f)
+                        currentScreen == Screen.SETTINGS -> Color.Black.copy(alpha = 0.3f)
                         !showBootSceneBackground && currentScreen == Screen.MAIN_MENU -> Color.DarkGray
                         isBooting && (currentEffectiveStage < BootStage.FADING_IN_BACKGROUND ||
                                 (bootScene.backgroundAlpha < 0.01f && currentEffectiveStage == BootStage.FADING_IN_BACKGROUND)) -> Color.Black
@@ -609,18 +736,24 @@ fun GameScreen(bootScene: BootScene, mainActivity: MainActivity) {
         ) {
             when (currentScreen) {
                 Screen.BOOT -> {
-                    // ... (Your existing Boot screen UI logic - kept as is)
                     if (displayError) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(16.dp)) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(16.dp)
+                        ) {
                             Text(
                                 text = "An Error Occurred:\n${bootScene.currentErrorMessage ?: "Unknown error during boot."}",
-                                fontSize = 18.sp, color = Color.Red, textAlign = TextAlign.Center
+                                fontSize = 18.sp,
+                                color = Color.Red,
+                                textAlign = TextAlign.Center
                             )
                         }
                     } else if (isBooting) {
                         val fadeMillis = bootScene.defaultFadeDurationMillis.toInt()
                         Column(
-                            modifier = Modifier.fillMaxSize().padding(16.dp),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
@@ -630,8 +763,13 @@ fun GameScreen(bootScene: BootScene, mainActivity: MainActivity) {
                                 exit = fadeOut(animationSpec = tween(fadeMillis / 2))
                             ) {
                                 Text(
-                                    bootScene.warningTextContent, fontSize = 16.sp, textAlign = TextAlign.Center,
-                                    color = Color.LightGray, modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp).fillMaxWidth()
+                                    text = bootScene.warningTextContent,
+                                    fontSize = 16.sp,
+                                    textAlign = TextAlign.Center,
+                                    color = Color.LightGray,
+                                    modifier = Modifier
+                                        .padding(horizontal = 24.dp, vertical = 20.dp)
+                                        .fillMaxWidth()
                                 )
                             }
                             AnimatedVisibility(
@@ -641,8 +779,12 @@ fun GameScreen(bootScene: BootScene, mainActivity: MainActivity) {
                             ) {
                                 if (bootScene.logoDrawableRes != 0) {
                                     Image(
-                                        painter = painterResource(id = bootScene.logoDrawableRes), contentDescription = "Game Logo",
-                                        modifier = Modifier.fillMaxWidth(0.6f).padding(vertical = 20.dp), contentScale = ContentScale.Fit
+                                        painter = painterResource(id = bootScene.logoDrawableRes),
+                                        contentDescription = "Game Logo",
+                                        modifier = Modifier
+                                            .fillMaxWidth(0.6f)
+                                            .padding(vertical = 20.dp),
+                                        contentScale = ContentScale.Fit
                                     )
                                 }
                             }
@@ -652,8 +794,11 @@ fun GameScreen(bootScene: BootScene, mainActivity: MainActivity) {
                                 exit = fadeOut(animationSpec = tween(fadeMillis / 2))
                             ) {
                                 Text(
-                                    bootScene.titleTextContent, fontSize = 32.sp, color = Color.White,
-                                    textAlign = TextAlign.Center, modifier = Modifier.padding(vertical = 20.dp)
+                                    text = bootScene.titleTextContent,
+                                    fontSize = 32.sp,
+                                    color = Color.White,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 20.dp)
                                 )
                             }
                             AnimatedVisibility(
@@ -661,7 +806,10 @@ fun GameScreen(bootScene: BootScene, mainActivity: MainActivity) {
                                 enter = fadeIn(animationSpec = tween(fadeMillis / 2)),
                                 exit = fadeOut(animationSpec = tween(fadeMillis / 2))
                             ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = 30.dp)) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(top = 30.dp)
+                                ) {
                                     Button(onClick = { bootScene.handleContinueInput() }) {
                                         Text(bootScene.continueButtonTextContent, fontSize = 18.sp)
                                     }
@@ -669,14 +817,16 @@ fun GameScreen(bootScene: BootScene, mainActivity: MainActivity) {
                             }
                         }
                     } else {
-                        Box(contentAlignment = Alignment.Center) { /* Potentially loading or idle before transition */ }
+                        // Fallback empty box for non-booting, non-error boot screen states (should be rare)
+                        Box(contentAlignment = Alignment.Center) { }
                     }
                 }
                 Screen.MAIN_MENU -> {
                     MainMenuScreen(
                         onExitGame = { mainActivity.exitGameCleanup() },
                         onShowCredits = { mainActivity.navigateToCredits() },
-                        onShowGameSlots = { mainActivity.navigateToGameSlots() } // ++ Added this callback
+                        onShowGameSlots = { mainActivity.navigateToGameSlots() },
+                        onShowSettings = { mainActivity.navigateToSettings() }
                     )
                 }
                 Screen.CREDITS -> {
@@ -684,24 +834,26 @@ fun GameScreen(bootScene: BootScene, mainActivity: MainActivity) {
                         onBack = { mainActivity.navigateToMainMenu() }
                     )
                 }
-                // ++ New Case for Game Slots Screen ++
-                Screen.GAME_SLOTS -> {
-                    // Assuming GameSlotsScreen is defined elsewhere (e.g., game.scenes.GameSlotsScreen.kt)
-                    // If not, you'd define its Composable function here or import it.
-                    // For this to compile, you need GameSlotsScreen composable and SaveSlotInfo data class.
-                    // Make sure the necessary imports are at the top of MainActivity.kt
-                    // import com.example.stevesadventureandmystery.game.scenes.GameSlotsScreen
-                    // import com.example.stevesadventureandmystery.game.data.SaveSlotInfo
 
-                    GameSlotsScreen( // This assumes GameSlotsScreen is ready to be used
+                Screen.GAME_SLOTS -> {
+                    GameSlotsScreen(
                         saveSlots = mainActivity.saveSlotsState,
                         onSlotSelected = { slotInfo, isNewGame ->
                             mainActivity.onGameSlotSelected(slotInfo, isNewGame)
                         },
-                        onBackPressed = { mainActivity.navigateToMainMenu() },
-                        )
+                        onBackPressed = { mainActivity.navigateToMainMenu() }
+                    )
                 }
-                // ++ End New Case ++
+                Screen.SETTINGS -> {
+                    SettingsScreen(
+                        mainActivity = mainActivity,
+                        backgroundImageResId = if (mainActivity.bootScene.isBootSequenceCompletedAndBackgroundAvailable()) {
+                            mainActivity.bootScene.backgroundDrawableRes
+                        } else {
+                            PREVIEW_PLACEHOLDER_BACKGROUND
+                        }
+                    )
+                }
             }
         }
     }
@@ -720,7 +872,7 @@ fun ConfirmExitDialog(
         confirmButton = {
             Button(onClick = {
                 onConfirm()
-                onDismissRequest() // Dismiss after action
+                onDismissRequest()
             }) {
                 Text("Yes")
             }
@@ -728,7 +880,7 @@ fun ConfirmExitDialog(
         dismissButton = {
             Button(onClick = {
                 onCancel()
-                onDismissRequest() // Dismiss after action
+                onDismissRequest()
             }) {
                 Text("No")
             }
@@ -740,7 +892,8 @@ fun ConfirmExitDialog(
 fun MainMenuScreen(
     onExitGame: () -> Unit,
     onShowCredits: () -> Unit,
-    onShowGameSlots: () -> Unit // ++ New callback for navigating to game slots
+    onShowGameSlots: () -> Unit,
+    onShowSettings: () -> Unit
 ) {
     var showConfirmExitDialog by remember { mutableStateOf(false) }
 
@@ -750,27 +903,25 @@ fun MainMenuScreen(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            "Steve's Space Adventure Mystery", // Your game title
+            "Steve's Space Adventure Mystery",
             fontSize = 30.sp,
             color = Color.White,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(bottom = 32.dp)
         )
 
-        // ++ Button to navigate to Game Slots Screen ++
         Button(onClick = {
             Log.d("MainMenuScreen", "Continue/Load Game Clicked - Navigating to Game Slots")
             onShowGameSlots()
         }) {
-            Text("Continue / Load Game") // Or "Play Game", "Load/Save"
+            Text("Continue / Load Game")
         }
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Your existing "Start Game" button might be replaced or repurposed by the above.
-        // If "Start Game" means "Start a New Game directly", you'd need different logic.
-        // For now, I'm assuming "Continue / Load Game" is the primary way to proceed.
-
-        Button(onClick = { Log.d("MainMenuScreen", "Settings Clicked (Action TBD)") }) {
+        Button(onClick = {
+            Log.d("MainMenuScreen", "Settings Clicked - Navigating")
+            onShowSettings()
+        }) {
             Text("Settings")
         }
         Spacer(modifier = Modifier.height(16.dp))
@@ -798,7 +949,6 @@ fun MainMenuScreen(
             onConfirm = {
                 Log.d("MainMenuScreen", "Exit Confirmed")
                 onExitGame()
-                // showConfirmExitDialog = false // Not strictly needed as activity may finish
             },
             onCancel = {
                 Log.d("MainMenuScreen", "Exit Cancelled")
@@ -810,7 +960,7 @@ fun MainMenuScreen(
 
 @Composable
 private fun rememberMockBootScene(
-    context: android.content.Context = LocalContext.current,
+    context: Context = LocalContext.current,
     initialStage: BootStage = BootStage.IDLE,
     config: BootScene.() -> Unit = {}
 ): BootScene {
@@ -822,20 +972,19 @@ private fun rememberMockBootScene(
             scope = previewScope
         ).apply {
             this.currentStage = initialStage
-            config() // Apply custom configurations
+            config()
 
-            // Default sensible values for preview if not overridden
             if (this.backgroundDrawableRes == 0 && initialStage >= BootStage.FADING_IN_BACKGROUND) {
-                this.backgroundDrawableRes = PREVIEW_PLACEHOLDER_BACKGROUND // Ensure placeholder if needed
+                this.backgroundDrawableRes = PREVIEW_PLACEHOLDER_BACKGROUND
             }
             if (initialStage >= BootStage.FADING_IN_BACKGROUND) {
-                this.backgroundAlpha = 1f // Visible background
+                this.backgroundAlpha = 1f
             }
             if (initialStage >= BootStage.SHOWING_TITLE && initialStage < BootStage.COMPLETED) this.showTitleText = true
             if (initialStage == BootStage.SHOWING_WARNING) this.showWarningText = true
             if (initialStage == BootStage.SHOWING_LOGO) this.showLogoImage = true
             if (initialStage == BootStage.AWAITING_CONTINUE_INPUT) {
-                this.showTitleText = true // Title usually visible here
+                this.showTitleText = true
                 this.showContinueButtonElements = true
             }
             if (initialStage == BootStage.COMPLETED) {
@@ -851,38 +1000,37 @@ private fun rememberMockMainActivity(initialScreen: Screen = Screen.MAIN_MENU): 
     val context = LocalContext.current
     return remember {
         object : MainActivity() {
-            // ++ Mock SaveLoadManager and slots for preview ++
             private val mockSaveLoadManager = SaveLoadManager(context)
             init {
                 super.bootScene = BootScene(context, {}, CoroutineScope(Dispatchers.Main)).apply{
                     backgroundDrawableRes = PREVIEW_PLACEHOLDER_BACKGROUND
                     backgroundAlpha = 1f
-                    currentStage = if (initialScreen == Screen.MAIN_MENU || initialScreen == Screen.CREDITS || initialScreen == Screen.GAME_SLOTS) {
+                    currentStage = if (initialScreen == Screen.MAIN_MENU || initialScreen == Screen.CREDITS || initialScreen == Screen.GAME_SLOTS || initialScreen == Screen.SETTINGS) {
                         BootStage.COMPLETED
                     } else {
                         BootStage.IDLE
                     }
                 }
                 super.currentScreen = initialScreen
-                // ++ Initialize saveSlotsState for preview ++
                 super.saveSlotsState = mockSaveLoadManager.getAllSaveSlotInfo().ifEmpty {
-                    // Provide some sample slots if preferences are empty for the preview
                     listOf(
-                        SaveSlotInfo(1, true, null, null), // Slot 1: Empty
-                        SaveSlotInfo(2, false, "Chapter 1: The Beginning", "2023-10-26 10:00 AM"), // Slot 2: Has data
-                        SaveSlotInfo(3, true, null, null)  // Slot 3: Empty
+                        SaveSlotInfo(1, true, null, null),
+                        SaveSlotInfo(2, false, "Chapter 1: The Beginning", "2023-10-26 10:00 AM"),
+                        SaveSlotInfo(3, true, null, null)
                     )
                 }
+
+                super.sharedPreferences = context.getSharedPreferences("PreviewPrefs", MODE_PRIVATE)
+                super.loadGameSettings()
             }
             override fun navigateToCredits() { currentScreen = Screen.CREDITS }
             override fun navigateToMainMenu() { currentScreen = Screen.MAIN_MENU }
-            override fun navigateToGameSlots() { currentScreen = Screen.GAME_SLOTS } // ++ Mock nav ++
+            override fun navigateToGameSlots() { currentScreen = Screen.GAME_SLOTS }
+            override fun navigateToSettings() { currentScreen = Screen.SETTINGS }
             override fun exitGameCleanup() { Log.d("Preview", "Exit Game Action Triggered") }
 
-            // ++ Mock slot actions for preview if needed ++
             override fun onGameSlotSelected(slotInfo: SaveSlotInfo, isNewGame: Boolean) {
                 Log.d("Preview", "Slot selected: ${slotInfo.slotId}, isNew: $isNewGame")
-                // Simulate saving/loading for preview by updating the slot or navigating
                 if (isNewGame && slotInfo.isEmpty) {
                     val updatedSlots = saveSlotsState.map {
                         if (it.slotId == slotInfo.slotId) {
@@ -891,16 +1039,23 @@ private fun rememberMockMainActivity(initialScreen: Screen = Screen.MAIN_MENU): 
                     }
                     saveSlotsState = updatedSlots
                 }
-                currentScreen = Screen.MAIN_MENU // Simulate going back or to game
+                currentScreen = Screen.MAIN_MENU
             }
             override fun onGameSlotDelete(slotId: Int) {
                 Log.d("Preview", "Slot delete: $slotId")
-                // Simulate deletion for preview
                 val updatedSlots = saveSlotsState.map {
                     if (it.slotId == slotId) it.copy(isEmpty = true, chapterName = null, lastSavedTimestamp = null)
                     else it
                 }
                 saveSlotsState = updatedSlots
+            }
+
+            override fun onMusicVolumeChange(newVolume: Float) {
+                super.onMusicVolumeChange(newVolume)
+            }
+
+            override fun onSfxVolumeChange(newVolume: Float) {
+                super.onSfxVolumeChange(newVolume)
             }
         }
     }
@@ -926,12 +1081,7 @@ fun PreviewBootSceneLogo() {
     StevesAdventureAndMysteryTheme {
         GameScreen(
             bootScene = rememberMockBootScene(initialStage = BootStage.SHOWING_LOGO) {
-                // Assuming you have a placeholder or actual logo in drawables
-                // If not, this preview might not show a logo, or you can use a generic icon
-                // For example, using a built-in icon if you don't have a specific one yet:
-                // logoDrawableRes = android.R.drawable.sym_def_app_icon
-                // Or better, add a placeholder to your project:
-                logoDrawableRes = R.drawable.ic_launcher_foreground // Replace if you have a specific game logo
+                logoDrawableRes = R.drawable.ic_launcher_foreground
             },
             mainActivity = rememberMockMainActivity(initialScreen = Screen.BOOT)
         )
@@ -1002,7 +1152,6 @@ fun PreviewGameSlotsScreenWithData() {
     StevesAdventureAndMysteryTheme {
         GameScreen(
             bootScene = rememberMockBootScene(initialStage = BootStage.COMPLETED),
-            // rememberMockMainActivity already provides sample data for GAME_SLOTS
             mainActivity = rememberMockMainActivity(initialScreen = Screen.GAME_SLOTS)
         )
     }
@@ -1013,7 +1162,6 @@ fun PreviewGameSlotsScreenWithData() {
 fun PreviewGameSlotsScreenAllEmpty() {
     StevesAdventureAndMysteryTheme {
         val mockMainActivity = rememberMockMainActivity(initialScreen = Screen.GAME_SLOTS)
-        // Override the saveSlotsState for this specific preview case
         mockMainActivity.saveSlotsState = listOf(
             SaveSlotInfo(1, true, null, null),
             SaveSlotInfo(2, true, null, null),
@@ -1026,13 +1174,21 @@ fun PreviewGameSlotsScreenAllEmpty() {
     }
 }
 
-// You might also want a preview for the ConfirmExitDialog if it's not easily triggered
-// via the MainMenuScreen preview.
+@Preview(name = "Settings Screen", showBackground = true, device = "spec:orientation=landscape,width=1280dp,height=800dp,dpi=240")
+@Composable
+fun PreviewSettingsScreen() {
+    StevesAdventureAndMysteryTheme {
+        GameScreen(
+            bootScene = rememberMockBootScene(initialStage = BootStage.COMPLETED),
+            mainActivity = rememberMockMainActivity(initialScreen = Screen.SETTINGS)
+        )
+    }
+}
+
 @Preview(name = "Confirm Exit Dialog", showBackground = true)
 @Composable
 fun PreviewConfirmExitDialog() {
     StevesAdventureAndMysteryTheme {
-        // Provide a simple background for the dialog to be visible
         Box(modifier = Modifier.fillMaxSize().background(Color.DarkGray.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
             ConfirmExitDialog(
                 onDismissRequest = { Log.d("Preview", "Dismiss Dialog") },

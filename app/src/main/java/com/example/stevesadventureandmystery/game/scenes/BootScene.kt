@@ -52,7 +52,7 @@ class BootScene(
     val logoDisplayDurationMillis = 2000L
     val titleDisplayDurationMillis = 2500L
     val backgroundFadeAnimationSteps = 30
-    val backgroundExtraFadeDurationMillis = 1000L // Added to defaultFadeDurationMillis for total background fade
+    val backgroundExtraFadeDurationMillis = 1000L
 
     private var mediaPlayer: MediaPlayer? = null
     private var musicJob: Job? = null
@@ -67,8 +67,8 @@ class BootScene(
 
     fun relinquishMediaPlayerControl() {
         Log.d(BOOT_SCENE_TAG, "MediaPlayer control relinquished by BootScene.")
-        musicJob?.cancel() // Cancel any pending music operations from BootScene first
-        mediaPlayer = null // Then nullify the reference
+        musicJob?.cancel()
+        mediaPlayer = null
         isMusicPlayingState = false
     }
 
@@ -78,10 +78,6 @@ class BootScene(
                 currentStage != BootStage.ERROR
     }
 
-    /**
-     * Helper function for MainActivity to determine if the boot sequence completed
-     * and provided a background that can be used by subsequent screens.
-     */
     fun isBootSequenceCompletedAndBackgroundAvailable(): Boolean {
         return currentStage == BootStage.COMPLETED && backgroundDrawableRes != 0
     }
@@ -100,9 +96,8 @@ class BootScene(
 
     private fun resetState() {
         Log.d(BOOT_SCENE_TAG, "Resetting BootScene state.")
-        sceneJob.cancelChildren() // Cancel all non-music coroutines
-
-        stopAndReleaseMusicPlayer() // Music is always stopped and released on reset
+        sceneJob.cancelChildren()
+        stopAndReleaseMusicPlayer()
 
         showWarningText = false
         showLogoImage = false
@@ -128,7 +123,7 @@ class BootScene(
                 backgroundMusicAssetPath = "audio/music/space_explorers.mp3"
 
                 delay(assetLoadingSimulatedDelayMillis)
-                if (!isActive) return@launch // Check before proceeding
+                if (!isActive) return@launch
                 Log.d(BOOT_SCENE_TAG, "Assets loaded.")
                 currentStage = BootStage.SHOWING_WARNING
                 Log.d(BOOT_SCENE_TAG, "Stage changed to: $currentStage")
@@ -149,7 +144,7 @@ class BootScene(
             delay(warningDisplayDurationMillis)
             if (!isActive) return@launch
             showWarningText = false
-            delay(defaultFadeDurationMillis / 2) // Small delay for fade out visual
+            delay(defaultFadeDurationMillis / 2)
             if (!isActive) return@launch
 
             currentStage = BootStage.SHOWING_LOGO
@@ -169,8 +164,7 @@ class BootScene(
             } else {
                 Log.w(BOOT_SCENE_TAG, "Logo drawable resource not set, skipping direct display.")
             }
-            // Give a moment for the logo to fade out if animations are synced elsewhere
-            delay(defaultFadeDurationMillis / 3) // Adjusted small delay
+            delay(defaultFadeDurationMillis / 3)
             if (!isActive) return@launch
 
             currentStage = BootStage.FADING_IN_BACKGROUND
@@ -178,7 +172,6 @@ class BootScene(
             fadeInBackgroundVisuals()
         }
     }
-
 
     private fun fadeInBackgroundVisuals() {
         Log.d(BOOT_SCENE_TAG, "fadeInBackgroundVisuals()")
@@ -217,7 +210,7 @@ class BootScene(
                 resumeMusicPlayback()
             } else if (mediaPlayer?.isPlaying == true) {
                 Log.d(BOOT_SCENE_TAG, "Music is already playing. No action needed in showTitleAndMusic.")
-                isMusicPlayingState = true // Ensure state consistency
+                isMusicPlayingState = true
             } else {
                 Log.w(BOOT_SCENE_TAG, "MediaPlayer conditions not met to start/resume in showTitleAndMusic (Player: $mediaPlayer, Path: $backgroundMusicAssetPath, WasPlaying: $wasMusicPlayingBeforePause).")
             }
@@ -225,12 +218,11 @@ class BootScene(
             delay(titleDisplayDurationMillis)
             if (!isActive) return@launch
 
-            currentStage = BootStage.SHOWING_CONTINUE_BUTTON // This stage might be redundant if AWAITING_CONTINUE_INPUT implies button is shown
+            currentStage = BootStage.SHOWING_CONTINUE_BUTTON
             Log.d(BOOT_SCENE_TAG, "Stage changed to: $currentStage (or preparing for AWAITING_CONTINUE_INPUT)")
             showContinueButton()
         }
     }
-
 
     private fun initializeAndPrepareMusic(assetPath: String) {
         if (!sceneScope.isActive) {
@@ -238,11 +230,11 @@ class BootScene(
             return
         }
 
-        musicJob?.cancel() // Cancel any previous music job
+        musicJob?.cancel()
         musicJob = sceneScope.launch {
             if (mediaPlayer != null) {
                 Log.w(BOOT_SCENE_TAG, "MediaPlayer instance already exists in initializeAndPrepareMusic. Releasing before creating new.")
-                stopAndReleaseMusicPlayer() // Full release
+                stopAndReleaseMusicPlayer()
             }
 
             Log.d(BOOT_SCENE_TAG, "Initializing and preparing music from assets: $assetPath")
@@ -251,26 +243,26 @@ class BootScene(
             try {
                 afd = context.assets.openFd(assetPath)
                 mediaPlayer?.apply {
-                    val validAfd = afd // To avoid afd being null if an exception occurs before setDataSource
+                    val validAfd = afd
                     setDataSource(validAfd.fileDescriptor, validAfd.startOffset, validAfd.length)
                     isLooping = true
                     setOnPreparedListener { mp ->
                         Log.d(BOOT_SCENE_TAG, "MediaPlayer prepared.")
-                        if (sceneScope.isActive && mediaPlayer == mp) { // Ensure it's the current player
+                        if (sceneScope.isActive && mediaPlayer == mp) {
                             try {
                                 mp.start()
                                 isMusicPlayingState = true
-                                wasMusicPlayingBeforePause = true // Set this as it's now intended to play
+                                wasMusicPlayingBeforePause = true
                                 Log.d(BOOT_SCENE_TAG, "SUCCESS: Music started from assets.")
                             } catch (e: IllegalStateException) {
                                 Log.e(BOOT_SCENE_TAG, "IllegalStateException on mp.start(): ${e.message}", e)
-                                if (mediaPlayer == mp) stopAndReleaseMusicPlayer() // Only release if it's still our current player
-                                else mp.release() // Otherwise, just release this specific instance
+                                if (mediaPlayer == mp) stopAndReleaseMusicPlayer()
+                                else mp.release()
                             }
                         } else {
                             Log.d(BOOT_SCENE_TAG, "MediaPlayer prepared, but scene/player no longer valid. Releasing this instance.")
-                            mp.release() // Release the prepared player if it's not going to be used
-                            if (mediaPlayer == mp) { // If it was somehow still our main player, clear flags
+                            mp.release()
+                            if (mediaPlayer == mp) {
                                 isMusicPlayingState = false
                                 wasMusicPlayingBeforePause = false
                             }
@@ -285,9 +277,9 @@ class BootScene(
                     prepareAsync()
                     Log.d(BOOT_SCENE_TAG, "MediaPlayer prepareAsync() called.")
                 }
-            } catch (e: Exception) { // Catch broader exceptions like IOException, IllegalStateException
+            } catch (e: Exception) {
                 Log.e(BOOT_SCENE_TAG, "Exception setting up MediaPlayer for '$assetPath': ${e.message}", e)
-                stopAndReleaseMusicPlayer() // This will clear flags
+                stopAndReleaseMusicPlayer()
             } finally {
                 try {
                     afd?.close()
@@ -303,13 +295,12 @@ class BootScene(
             Log.d(BOOT_SCENE_TAG, "Scene not active or no media player to pause.")
             return
         }
-        musicJob?.cancel() // Cancel any pending start attempts from initializeAndPrepareMusic
+        musicJob?.cancel()
         mediaPlayer?.let {
             if (it.isPlaying) {
                 try {
                     it.pause()
                     isMusicPlayingState = false
-                    // wasMusicPlayingBeforePause should remain true if it was successfully playing
                     Log.d(BOOT_SCENE_TAG, "BootScene music PAUSED.")
                 } catch (e: IllegalStateException) {
                     Log.e(BOOT_SCENE_TAG, "IllegalStateException on mediaPlayer.pause(): ${e.message}", e)
@@ -332,12 +323,11 @@ class BootScene(
                 resumeMusicPlayback()
             } else if (player.isPlaying) {
                 Log.d(BOOT_SCENE_TAG, "resumeMusic called, but music is already playing.")
-                isMusicPlayingState = true // Ensure state is correct
+                isMusicPlayingState = true
             } else {
                 Log.d(BOOT_SCENE_TAG, "Conditions not met to resume BootScene music (Player exists but not playing OR wasMusicPlayingBeforePause is false).")
             }
         } ?: if (wasMusicPlayingBeforePause && !backgroundMusicAssetPath.isNullOrEmpty()) {
-            // Player is null, but we intended for music to be playing
             Log.d(BOOT_SCENE_TAG, "MediaPlayer was null but was playing before pause. Re-initializing for resume.")
             initializeAndPrepareMusic(backgroundMusicAssetPath!!)
         } else {
@@ -354,16 +344,22 @@ class BootScene(
             } catch (e: IllegalStateException) {
                 Log.e(BOOT_SCENE_TAG, "IllegalStateException on mediaPlayer.start() during resume: ${e.message}", e)
                 isMusicPlayingState = false
-                // Consider full re-initialization if resume fails catastrophically
-                // stopAndReleaseMusicPlayer()
-                // if (!backgroundMusicAssetPath.isNullOrEmpty()) initializeAndPrepareMusic(backgroundMusicAssetPath!!)
             }
         }
     }
 
+    fun setVolume(volume: Float) {
+        val clampedVolume = volume.coerceIn(0f, 1f)
+        try {
+            mediaPlayer?.setVolume(clampedVolume, clampedVolume)
+            Log.d(BOOT_SCENE_TAG, "BootScene MediaPlayer volume set to: $clampedVolume")
+        } catch (e: IllegalStateException) {
+            Log.e(BOOT_SCENE_TAG, "Error setting volume on BootScene media player: ${e.message}")
+        }
+    }
 
     private fun stopAndReleaseMusicPlayer() {
-        musicJob?.cancel() // Cancel any pending music job
+        musicJob?.cancel()
         mediaPlayer?.let {
             try {
                 if (it.isPlaying) {
@@ -372,20 +368,19 @@ class BootScene(
                 }
                 it.release()
                 Log.d(BOOT_SCENE_TAG, "MediaPlayer released in stopAndReleaseMusicPlayer.")
-            } catch (e: Exception) { // Catch IllegalStateException or any other
+            } catch (e: Exception) {
                 Log.e(BOOT_SCENE_TAG, "Exception during stop/release of MediaPlayer: ${e.message}", e)
-                // Attempt a final release if the first failed and it wasn't due to already being released
                 try { if (mediaPlayer != null) it.release() } catch (ex: Exception) { Log.e(BOOT_SCENE_TAG, "Secondary release attempt failed", ex) }
             }
         }
         mediaPlayer = null
         isMusicPlayingState = false
-        wasMusicPlayingBeforePause = false // Crucial: reset this flag
+        wasMusicPlayingBeforePause = false
     }
 
     private fun showContinueButton() {
         Log.d(BOOT_SCENE_TAG, "showContinueButton()")
-        sceneScope.launch { // Ensure this runs on the scene's scope
+        sceneScope.launch {
             if (!isActive) return@launch
             showContinueButtonElements = true
             currentStage = BootStage.AWAITING_CONTINUE_INPUT
@@ -396,12 +391,12 @@ class BootScene(
     fun handleContinueInput() {
         if (currentStage == BootStage.AWAITING_CONTINUE_INPUT) {
             Log.d(BOOT_SCENE_TAG, "Continue input received.")
-            sceneScope.launch { // Launch on sceneScope to ensure isActive checks are relevant
-                if (!isActive) return@launch // Check if scene is still active
+            sceneScope.launch {
+                if (!isActive) return@launch
                 showContinueButtonElements = false
                 currentStage = BootStage.COMPLETED
                 Log.d(BOOT_SCENE_TAG, "Stage changed to: $currentStage. Boot sequence complete.")
-                onComplete(true) // Music is not stopped here; MainActivity decides.
+                onComplete(true)
             }
         } else {
             Log.w(BOOT_SCENE_TAG, "Continue input received but not in AWAITING_CONTINUE_INPUT stage. Current stage: $currentStage")
@@ -418,17 +413,16 @@ class BootScene(
         currentErrorMessage = errorMessage
         currentStage = BootStage.ERROR
 
-        sceneJob.cancelChildren() // Cancel other ongoing scene tasks first
-        stopAndReleaseMusicPlayer() // Then stop and release music
+        sceneJob.cancelChildren()
+        stopAndReleaseMusicPlayer()
 
-        onComplete(false) // Notify MainActivity
+        onComplete(false)
     }
 
     fun cleanup() {
         Log.d(BOOT_SCENE_TAG, "BootScene cleanup() called. Current stage: $currentStage")
-        // Cancel all coroutines launched within sceneScope (children of sceneJob).
-        sceneJob.cancelChildren() // Cancels children of SupervisorJob
-        sceneJob.cancel()         // Cancels the SupervisorJob itself, ensuring sceneScope becomes inactive
+        sceneJob.cancelChildren()
+        sceneJob.cancel()
 
         if (mediaPlayer != null) {
             Log.d(BOOT_SCENE_TAG, "Cleaning up BootScene's MediaPlayer as it was not relinquished or reacquired.")
@@ -436,7 +430,7 @@ class BootScene(
         } else {
             Log.d(BOOT_SCENE_TAG, "MediaPlayer was null in cleanup (likely relinquished or never initialized).")
         }
-        currentStage = BootStage.IDLE // Optionally reset stage
+        currentStage = BootStage.IDLE
         Log.d(BOOT_SCENE_TAG, "BootScene cleanup finished. sceneScope.isActive: ${sceneScope.isActive}")
     }
 }
